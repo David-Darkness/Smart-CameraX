@@ -1,5 +1,6 @@
 package com.david.smartcamerax;
 
+import android.content.Intent;
 import android.os.Bundle;
 
 import androidx.activity.EdgeToEdge;
@@ -7,6 +8,8 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+
+import com.google.android.material.button.MaterialButton;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -20,5 +23,12 @@ public class MainActivity extends AppCompatActivity {
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
             return insets;
         });
+
+        MaterialButton btnOpen = findViewById(R.id.btn_open_camera);
+        btnOpen.setOnClickListener(v -> startActivity(new Intent(this, CameraActivity.class)));
+
+        //botón para abrir la galería de imágenes guardadas por la app
+        MaterialButton btnGallery = findViewById(R.id.btn_open_gallery);
+        btnGallery.setOnClickListener(v -> startActivity(new Intent(this, GalleryActivity.class)));
     }
 }

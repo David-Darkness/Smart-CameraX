@@ -1,3 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Smart CameraX</string>
+    <string name="thumbnail">Miniatura</string>
+    <string name="no_images">No hay imágenes</string>
+    <string name="welcome_subtitle">Captura, detecta y guarda tus imágenes con facilidad</string>
+    <string name="open_gallery">Ver galería</string>
+    <string name="open_camera">Abrir cámara</string>
+
+    <!-- Descripciones de accesibilidad -->
+    <string name="desc_switch_camera">Cambiar cámara</string>
+    <string name="desc_change_filter">Cambiar filtro</string>
+    <string name="desc_smart_mode">Modo inteligente</string>
+    <string name="desc_take_photo">Tomar foto</string>
+    <string name="desc_back">Volver</string>
+
+    <!-- Mensajes usados por CameraActivity -->
+    <string name="msg_filter">Filtro: %1$s</string>
+    <string name="msg_smart_on">Modo inteligente ON</string>
+    <string name="msg_smart_off">Modo inteligente OFF</string>
+    <string name="msg_photo_saved">Foto guardada</string>
+    <string name="msg_photo_error">Error al guardar foto</string>
+    <string name="msg_permission_denied">Permiso de cámara denegado</string>
+
+    <!-- Nombres de filtros -->
+    <string name="filter_normal">Normal</string>
+    <string name="filter_bw">B/N</string>
+    <string name="filter_sepia">Sepia</string>
 </resources>
