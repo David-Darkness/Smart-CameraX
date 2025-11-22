@@ -53,6 +53,7 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.5.1")
     implementation("androidx.camera:camera-lifecycle:1.5.1")
     implementation("androidx.camera:camera-view:1.5.1")
+    implementation("androidx.camera:camera-video:1.5.1")
 
     // ML Kit: actualizar a versiones más recientes
     implementation("com.google.mlkit:text-recognition:16.0.1")

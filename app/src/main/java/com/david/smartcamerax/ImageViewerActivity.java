@@ -16,10 +16,12 @@ public class ImageViewerActivity extends AppCompatActivity {
 
     private static final String EXTRA_LIST = "extra_image_list";
     private static final String EXTRA_POS = "extra_image_pos";
+    private static final String EXTRA_FLAGS = "extra_video_flags";
 
-    public static void start(Context ctx, ArrayList<String> uris, int position) {
+    public static void start(Context ctx, ArrayList<String> uris, boolean[] videoFlags, int position) {
         Intent i = new Intent(ctx, ImageViewerActivity.class);
         i.putStringArrayListExtra(EXTRA_LIST, uris);
+        i.putExtra(EXTRA_FLAGS, videoFlags);
         i.putExtra(EXTRA_POS, position);
         ctx.startActivity(i);
     }
@@ -37,7 +39,8 @@ public class ImageViewerActivity extends AppCompatActivity {
 
         if (items == null) items = new ArrayList<>();
 
-        ImagePagerAdapter adapter = new ImagePagerAdapter(items);
+        boolean[] flags = getIntent().getBooleanArrayExtra(EXTRA_FLAGS);
+        ImagePagerAdapter adapter = new ImagePagerAdapter(items, flags);
         vp.setAdapter(adapter);
         vp.setCurrentItem(Math.max(0, Math.min(pos, items.size() - 1)), false);
 

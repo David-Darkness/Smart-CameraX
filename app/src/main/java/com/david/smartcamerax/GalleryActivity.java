@@ -20,6 +20,8 @@ import android.widget.TextView;
 import android.widget.ImageButton;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 import com.david.smartcamerax.storage.ImageStore;
@@ -67,12 +69,15 @@ public class GalleryActivity extends AppCompatActivity {
         // Grid de 3 columnas para miniaturas
         rvGallery.setLayoutManager(new GridLayoutManager(this, 3));
         // cuando se hace click se crea una lista de strings (URIs) y se abre el visor en la posición
-        adapter = new GalleryAdapter((uri, position) -> {
+        adapter = new GalleryAdapter((item, position) -> {
             ArrayList<String> list = new ArrayList<>();
-            for (Uri u : adapter.getCurrentList()) {
-                list.add(u.toString());
+            boolean[] videoFlags = new boolean[adapter.getCurrentList().size()];
+            int i = 0;
+            for (MediaItem mi : adapter.getCurrentList()) {
+                list.add(mi.uri.toString());
+                videoFlags[i++] = mi.isVideo;
             }
-            ImageViewerActivity.start(GalleryActivity.this, list, position);
+            ImageViewerActivity.start(GalleryActivity.this, list, videoFlags, position);
         });
         rvGallery.setAdapter(adapter);
 
@@ -85,7 +90,7 @@ public class GalleryActivity extends AppCompatActivity {
      * Consulta MediaStore y actualiza el adaptador. Si no hay imágenes muestra un mensaje.
      */
     private void loadImages() {
-        List<Uri> items = queryAppImages(this);
+        List<MediaItem> items = queryAppMedia(this);
         if (items.isEmpty()) {
             tvEmpty.setVisibility(View.VISIBLE);
             rvGallery.setVisibility(View.GONE);
@@ -97,51 +102,77 @@ public class GalleryActivity extends AppCompatActivity {
     }
 
     /**
-     * queryAppImages()
+     * queryAppMedia()
      * <p>
-     * Consulta MediaStore para devolver URIs de imágenes guardadas por la app.
+     * Consulta MediaStore para devolver URIs de imágenes y videos guardados por la app.
      * - En Android Q+ filtra por RELATIVE_PATH (más fiable).
      * - En versiones antiguas filtra por DISPLAY_NAME con un patrón (heurística).
      *
      * Nota: devuelve URIs content:// que pueden usarse con ImageView.setImageURI o con Glide.
      */
-    public static List<Uri> queryAppImages(Context ctx) {
-        List<Uri> result = new ArrayList<>();
-        Uri collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
-        String[] projection = new String[]{
+    public static List<MediaItem> queryAppMedia(Context ctx) {
+        List<MediaItem> result = new ArrayList<>();
+        // Fotos
+        Uri imgCollection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+        String[] imgProjection = new String[]{
                 MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.DISPLAY_NAME,
                 MediaStore.Images.Media.RELATIVE_PATH,
                 MediaStore.Images.Media.DATE_ADDED
         };
-
-        String selection;
-        String[] selectionArgs;
-
+        String imgSelection;
+        String[] imgSelectionArgs;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            selection = MediaStore.Images.Media.RELATIVE_PATH + " LIKE ?";
-            selectionArgs = new String[]{"%" + ImageStore.RELATIVE_PATH + "%"};
+            imgSelection = MediaStore.Images.Media.RELATIVE_PATH + " LIKE ?";
+            imgSelectionArgs = new String[]{"%" + ImageStore.RELATIVE_PATH + "%"};
         } else {
-            selection = MediaStore.Images.Media.DISPLAY_NAME + " LIKE ?";
-            selectionArgs = new String[]{"%SmartCameraX%"};
+            imgSelection = MediaStore.Images.Media.DISPLAY_NAME + " LIKE ?";
+            imgSelectionArgs = new String[]{"%SmartCameraX%"};
         }
-
         String sort = MediaStore.Images.Media.DATE_ADDED + " DESC";
-
-        try (Cursor cursor = ctx.getContentResolver().query(collection, projection, selection, selectionArgs, sort)) {
+        try (Cursor cursor = ctx.getContentResolver().query(imgCollection, imgProjection, imgSelection, imgSelectionArgs, sort)) {
             if (cursor != null) {
                 int idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID);
+                int dateCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED);
                 while (cursor.moveToNext()) {
                     long id = cursor.getLong(idCol);
+                    long date = cursor.getLong(dateCol);
                     Uri contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
-                    result.add(contentUri);
+                    result.add(new MediaItem(contentUri, false, date));
                 }
             }
-        } catch (Exception e) {
-            // Logueamos el error para diagnóstico; no lanzamos excepción para no romper la UI
-            Log.w(TAG, "queryAppImages: error", e);
-        }
+        } catch (Exception e) { Log.w(TAG, "queryAppMedia images error", e); }
 
+        // Videos (guardados en Movies/SmartCameraX)
+        Uri vidCollection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
+        String[] vidProjection = new String[]{
+                MediaStore.Video.Media._ID,
+                MediaStore.Video.Media.RELATIVE_PATH,
+                MediaStore.Video.Media.DATE_ADDED
+        };
+        String vidSelection;
+        String[] vidSelectionArgs;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            vidSelection = MediaStore.Video.Media.RELATIVE_PATH + " LIKE ?";
+            vidSelectionArgs = new String[]{"%Movies/SmartCameraX%"};
+        } else {
+            vidSelection = MediaStore.Video.Media.DISPLAY_NAME + " LIKE ?";
+            vidSelectionArgs = new String[]{"%SmartCameraX%"};
+        }
+        try (Cursor cursor = ctx.getContentResolver().query(vidCollection, vidProjection, vidSelection, vidSelectionArgs, MediaStore.Video.Media.DATE_ADDED + " DESC")) {
+            if (cursor != null) {
+                int idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID);
+                int dateCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED);
+                while (cursor.moveToNext()) {
+                    long id = cursor.getLong(idCol);
+                    long date = cursor.getLong(dateCol);
+                    Uri contentUri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id);
+                    result.add(new MediaItem(contentUri, true, date));
+                }
+            }
+        } catch (Exception e) { Log.w(TAG, "queryAppMedia videos error", e); }
+
+        // Orden combinado por fecha descendente
+        Collections.sort(result, Comparator.comparingLong((MediaItem m) -> m.dateAdded).reversed());
         return result;
     }
 

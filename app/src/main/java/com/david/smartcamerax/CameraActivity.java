@@ -1,7 +1,7 @@
 package com.david.smartcamerax;
 
+import android.Manifest;
 import android.content.ContentValues;
-import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.Uri;
@@ -13,20 +13,21 @@ import android.util.Log;
 import android.view.View;
 import android.view.ViewTreeObserver;
 import android.widget.ImageButton;
-import android.widget.TextView;
 import android.widget.ImageView;
+import android.widget.TextView;
 import android.view.ViewGroup;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.camera.core.Camera;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-
 import com.david.smartcamerax.analyzers.SmartAnalyzer;
 import com.david.smartcamerax.storage.ImageStore;
 import com.david.smartcamerax.utils.PermissionHelper;
@@ -34,14 +35,21 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.snackbar.Snackbar;
 import com.google.common.util.concurrent.ListenableFuture;
 
-import java.io.IOException;
-import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import androidx.camera.video.FallbackStrategy;
+import androidx.camera.video.MediaStoreOutputOptions;
+import androidx.camera.video.PendingRecording;
+import androidx.camera.video.Quality;
+import androidx.camera.video.QualitySelector;
+import androidx.camera.video.Recorder;
+import androidx.camera.video.Recording;
+import androidx.camera.video.VideoCapture;
+import androidx.camera.video.VideoRecordEvent;
 
 /**
  * CameraActivity
@@ -68,6 +76,7 @@ import java.util.concurrent.Executors;
 public class CameraActivity extends AppCompatActivity {
 
     private static final String TAG = "CameraActivity";
+    private static final int REQUEST_AUDIO = 2001;
 
     // PreviewView (vista que muestra la cámara en pantalla)
     private androidx.camera.view.PreviewView previewView;
@@ -86,6 +95,13 @@ public class CameraActivity extends AppCompatActivity {
 
     // Executor para trabajo en background relacionado con la cámara (análisis)
     private ExecutorService cameraExecutor;
+    // CameraX video/recorder fields
+    private VideoCapture<Recorder> videoCapture;
+    private Recorder recorder;
+    private Recording currentRecording;
+    private boolean isRecording = false;
+    private Camera currentCamera;
+    private boolean flashEnabled = false;
 
     // ProcessCameraProvider future (para inicializar CameraX)
     private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
@@ -102,6 +118,20 @@ public class CameraActivity extends AppCompatActivity {
     private FloatingActionButton fabSwitch;
     private FloatingActionButton fabFilter;
     private FloatingActionButton fabSmart;
+    // Botones nuevos: grabar video y flash
+    private ImageButton btnFlash; // eliminado btnRecord para modo unificado
+    private ImageButton btnCapture; // referencia al botón único
+    private boolean pendingLongPress = false;
+    private boolean captureButtonPressed = false;
+    private final long LONG_PRESS_THRESHOLD_MS = 350; // tiempo para considerar "mantener" y empezar video
+    private Handler pressHandler = new Handler(Looper.getMainLooper());
+    private final Runnable startRecordingRunnable = () -> {
+        if (captureButtonPressed && !isRecording) {
+            pendingLongPress = true; // indica que entramos a modo video
+            startRecording();
+            if (btnCapture != null) btnCapture.setImageResource(R.drawable.ic_stop);
+        }
+    };
 
     // Handler del hilo principal para mostrar/ocultar overlays con delay (auto-hide)
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -167,22 +197,21 @@ public class CameraActivity extends AppCompatActivity {
         fabSwitch = findViewById(R.id.fab_switch);
         fabFilter = findViewById(R.id.fab_filter);
         fabSmart = findViewById(R.id.fab_smart);
-        ImageButton btnCapture = findViewById(R.id.btn_capture);
+        ImageButton btnCaptureLocal = findViewById(R.id.btn_capture);
+        btnCapture = btnCaptureLocal;
+        btnFlash = findViewById(R.id.btn_flash);
+        tvResult = findViewById(R.id.tv_result);
+        tvFilter = findViewById(R.id.tv_filter);
         ImageButton btnBack = findViewById(R.id.btn_back_camera);
-
-        // Botón volver a pantalla principal
         if (btnBack != null) {
             btnBack.setOnClickListener(v -> {
-                Intent intent = new Intent(CameraActivity.this, MainActivity.class);
-                intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                startActivity(intent);
+                // Si estaba grabando detener de forma segura
+                if (isRecording) {
+                    try { stopRecording(); } catch (Exception ignored) {}
+                }
                 finish();
             });
         }
-
-        // Overlays
-        tvResult = findViewById(R.id.tv_result);
-        tvFilter = findViewById(R.id.tv_filter);
 
         // Crear ImageView overlay para mostrar preview filtrado y añadirlo encima del previewView
         try {
@@ -213,10 +242,21 @@ public class CameraActivity extends AppCompatActivity {
         fabSwitch.setOnClickListener(v -> {
             cameraSelector = cameraSelector == CameraSelector.DEFAULT_BACK_CAMERA ?
                     CameraSelector.DEFAULT_FRONT_CAMERA : CameraSelector.DEFAULT_BACK_CAMERA;
+            // Si pasamos a cámara frontal, desactivar y ocultar flash
+            boolean isFront = cameraSelector == CameraSelector.DEFAULT_FRONT_CAMERA;
+            if (isFront) {
+                flashEnabled = false;
+                if (btnFlash != null) {
+                    btnFlash.setVisibility(View.GONE);
+                    btnFlash.setImageResource(R.drawable.ic_flash_off);
+                }
+            } else {
+                if (btnFlash != null) btnFlash.setVisibility(View.VISIBLE);
+            }
             startCamera(); // restart camera con nuevo selector
         });
 
-        // Botón: cambiar filtro (se aplica ahora también al preview)
+        // Botón: cambiar filtro (se aplica también al preview)
         fabFilter.setOnClickListener(v -> {
             currentFilter = (currentFilter + 1) % 3;
             String filterName = currentFilter == 0 ? getString(R.string.filter_normal) : currentFilter == 1 ? getString(R.string.filter_bw) : getString(R.string.filter_sepia);
@@ -243,9 +283,47 @@ public class CameraActivity extends AppCompatActivity {
             startCamera(); // re-bind con o sin ImageAnalysis según smartMode
         });
 
-        // Botón de captura
+        // Configurar botón único captura/grabación por pulsación
         if (btnCapture != null) {
-            btnCapture.setOnClickListener(v -> takePhoto());
+            btnCapture.setOnTouchListener((v, event) -> {
+                switch (event.getAction()) {
+                    case android.view.MotionEvent.ACTION_DOWN:
+                        captureButtonPressed = true;
+                        pendingLongPress = false;
+                        // Programar inicio de grabación si se mantiene
+                        pressHandler.postDelayed(startRecordingRunnable, LONG_PRESS_THRESHOLD_MS);
+                        return true;
+                    case android.view.MotionEvent.ACTION_UP:
+                    case android.view.MotionEvent.ACTION_CANCEL:
+                        pressHandler.removeCallbacks(startRecordingRunnable);
+                        if (!pendingLongPress) {
+                            // Click corto: tomar foto
+                            takePhoto();
+                        } else {
+                            // Estaba grabando: detener
+                            stopRecording();
+                        }
+                        // Reset estados y icono
+                        if (btnCapture != null) btnCapture.setImageResource(R.drawable.ic_camera);
+                        captureButtonPressed = false;
+                        pendingLongPress = false;
+                        return true;
+                }
+                return false;
+            });
+        }
+
+        // Botón de flash
+        if (btnFlash != null) {
+            btnFlash.setOnClickListener(v -> {
+                // No permitir flash en cámara frontal
+                if (cameraSelector == CameraSelector.DEFAULT_FRONT_CAMERA) {
+                    Snackbar.make(previewView, "Flash no disponible en cámara frontal", Snackbar.LENGTH_SHORT).show();
+                    return;
+                }
+                flashEnabled = !flashEnabled;
+                updateTorch();
+            });
         }
 
         // Pedir permisos si no están concedidos
@@ -264,9 +342,14 @@ public class CameraActivity extends AppCompatActivity {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 startCamera();
             } else {
-                // Si el usuario deniega permisos, mostramos mensaje y cerramos la Activity
                 Snackbar.make(previewView, "Permiso de cámara denegado", Snackbar.LENGTH_LONG).show();
                 finish();
+            }
+        } else if (requestCode == REQUEST_AUDIO) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && isRecording) {
+                // reiniciar grabación para incluir audio si justo se pidió
+                stopRecording();
+                startRecording();
             }
         }
     }
@@ -281,9 +364,8 @@ public class CameraActivity extends AppCompatActivity {
         cameraProviderFuture = ProcessCameraProvider.getInstance(this);
         cameraProviderFuture.addListener(() -> {
             try {
-                ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
-                bindCameraUseCases(cameraProvider);
-            } catch (ExecutionException | InterruptedException e) {
+                bindCameraUseCases(cameraProviderFuture.get());
+            } catch (Exception e) {
                 Log.e(TAG, "Error starting camera", e);
             }
         }, ContextCompat.getMainExecutor(this));
@@ -308,6 +390,18 @@ public class CameraActivity extends AppCompatActivity {
         Preview preview = new Preview.Builder().build();
         imageCapture = new ImageCapture.Builder().build();
 
+        // Configurar recorder/video capture
+        try {
+            recorder = new Recorder.Builder()
+                    .setQualitySelector(QualitySelector.from(Quality.HIGHEST, FallbackStrategy.lowerQualityThan(Quality.HIGHEST)))
+                    .build();
+            videoCapture = VideoCapture.withOutput(recorder);
+        } catch (Exception e) {
+            Log.w(TAG, "VideoCapture not available", e);
+            videoCapture = null;
+            recorder = null;
+        }
+
         preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
         // Si SmartMode está desactivado y existía un analyzer, lo cerramos para liberar recursos
@@ -320,38 +414,42 @@ public class CameraActivity extends AppCompatActivity {
             smartAnalyzer = null;
         }
 
+        ImageAnalysis imageAnalysis = null;
         if (smartMode) {
-            ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
+            imageAnalysis = new ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build();
 
             // Crear SmartAnalyzer una sola vez y mantener la referencia
             smartAnalyzer = new SmartAnalyzer(result -> runOnUiThread(() -> {
-                if (result != null && !result.isEmpty()) {
-                    if (tvResult != null) {
-                        // Mostrar el texto/QR detectado en el overlay
-                        tvResult.setText(result);
-                        tvResult.setVisibility(View.VISIBLE);
-                        mainHandler.removeCallbacks(hideResultRunnable);
-                        mainHandler.postDelayed(hideResultRunnable, 3000);
-                    }
+                if (result != null && !result.isEmpty() && tvResult != null) {
+                    // Mostrar el texto/QR detectado en el overlay
+                    tvResult.setText(result);
+                    tvResult.setVisibility(View.VISIBLE);
+                    mainHandler.removeCallbacks(hideResultRunnable);
+                    mainHandler.postDelayed(hideResultRunnable, 3000);
                 }
             }));
 
             imageAnalysis.setAnalyzer(cameraExecutor, smartAnalyzer);
-            try {
-                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture, imageAnalysis);
-            } catch (Exception e) {
-                Log.e(TAG, "Use case binding failed", e);
-            }
-            return;
         }
 
         try {
-            cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture);
+            if (imageAnalysis != null && videoCapture != null) {
+                currentCamera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture, imageAnalysis, videoCapture);
+            } else if (imageAnalysis != null) {
+                currentCamera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture, imageAnalysis);
+            } else if (videoCapture != null) {
+                currentCamera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture, videoCapture);
+            } else {
+                currentCamera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture);
+            }
         } catch (Exception e) {
             Log.e(TAG, "Use case binding failed", e);
         }
+
+        // Actualizar torch si estaba activo al reiniciar
+        updateTorch();
     }
 
     /**
@@ -359,55 +457,87 @@ public class CameraActivity extends AppCompatActivity {
      * <p>
      * Toma una foto y la guarda usando MediaStore. Si se seleccionó un filtro, se aplica al bitmap
      * después de guardarlo (operación simple que reescribe la Uri resultante).
-     *
-     * Notas:
-     * - Usamos ImageStore.buildContentValues() para garantizar que las imágenes se guarden en
-     *   Pictures/SmartCameraX en Android Q+.
-     * - En algunos dispositivos outputFileResults.getSavedUri() puede devolver null — en ese caso
-     *   intentamos buscar la Uri por displayName con ImageStore.getImageContentUri().
      */
     private void takePhoto() {
         if (imageCapture == null) return;
-
         String filename = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".jpg";
         ContentValues contentValues = ImageStore.buildContentValues(filename);
-
         ImageCapture.OutputFileOptions outputOptions = new ImageCapture.OutputFileOptions.Builder(
-                getContentResolver(), MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues
-        ).build();
-
+                getContentResolver(), MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues).build();
         imageCapture.takePicture(outputOptions, ContextCompat.getMainExecutor(this), new ImageCapture.OnImageSavedCallback() {
-            @Override
-            public void onImageSaved(@NonNull ImageCapture.OutputFileResults outputFileResults) {
+            @Override public void onImageSaved(@NonNull ImageCapture.OutputFileResults outputFileResults) {
                 Uri savedUri = outputFileResults.getSavedUri();
-                if (savedUri == null) {
-                    // Algunos dispositivos devuelven null; intentar reconstruir la Uri
-                    savedUri = ImageStore.getImageContentUri(CameraActivity.this, filename);
-                }
-
-                // Aplicar filtro (si corresponde) reescribiendo la imagen guardada
-                if (currentFilter != 0 && savedUri != null) {
-                    try {
-                        Bitmap bmp = MediaStore.Images.Media.getBitmap(getContentResolver(), savedUri);
-                        Bitmap filtered = currentFilter == 1 ? com.david.smartcamerax.utils.Filters.toGrayscale(bmp) : com.david.smartcamerax.utils.Filters.toSepia(bmp);
-                        try (OutputStream out = getContentResolver().openOutputStream(savedUri)) {
-                            if (out != null) filtered.compress(Bitmap.CompressFormat.JPEG, 90, out);
-                        }
-                    } catch (IOException e) {
-                        Log.e(TAG, "Error applying filter", e);
-                    }
-                }
-
-                // Feedback al usuario
-                Snackbar.make(previewView, "Foto guardada", Snackbar.LENGTH_SHORT).show();
-            }
-
-            @Override
-            public void onError(@NonNull ImageCaptureException exception) {
+                if (savedUri == null) savedUri = ImageStore.getImageContentUri(CameraActivity.this, filename);
+                Log.d(TAG, "Photo saved at: " + savedUri);
+                Snackbar.make(previewView, getString(R.string.msg_photo_saved), Snackbar.LENGTH_SHORT).show(); }
+            @Override public void onError(@NonNull ImageCaptureException exception) {
                 Log.e(TAG, "Photo capture failed: " + exception.getMessage(), exception);
-                Snackbar.make(previewView, "Error al guardar foto", Snackbar.LENGTH_SHORT).show();
+                Snackbar.make(previewView, getString(R.string.msg_photo_error), Snackbar.LENGTH_SHORT).show(); }
+        });
+    }
+
+    // Inicia la grabación de video; guarda en MediaStore
+    private void startRecording() {
+        if (recorder == null || videoCapture == null) {
+            Snackbar.make(previewView, getString(R.string.msg_record_not_supported), Snackbar.LENGTH_SHORT).show();
+            return;
+        }
+        String filename = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".mp4";
+        ContentValues contentValues = new ContentValues();
+        contentValues.put(MediaStore.Video.Media.DISPLAY_NAME, filename);
+        contentValues.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4");
+        contentValues.put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/SmartCameraX");
+        MediaStoreOutputOptions outputOptions = new MediaStoreOutputOptions.Builder(getContentResolver(), MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+                .setContentValues(contentValues).build();
+
+        boolean hasAudio = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
+        if (!hasAudio) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_AUDIO);
+        }
+        PendingRecording pending = recorder.prepareRecording(this, outputOptions);
+        if (hasAudio) pending = pending.withAudioEnabled();
+
+        currentRecording = pending.start(ContextCompat.getMainExecutor(this), event -> {
+            if (event instanceof VideoRecordEvent.Start) {
+                isRecording = true;
+                Snackbar.make(previewView, getString(R.string.msg_recording_start), Snackbar.LENGTH_SHORT).show();
+            } else if (event instanceof VideoRecordEvent.Finalize) {
+                VideoRecordEvent.Finalize finalizeEvent = (VideoRecordEvent.Finalize) event;
+                if (finalizeEvent.hasError()) {
+                    Log.e(TAG, "Video capture failed: " + finalizeEvent.getError());
+                    Snackbar.make(previewView, getString(R.string.msg_record_error), Snackbar.LENGTH_SHORT).show();
+                } else {
+                    Snackbar.make(previewView, getString(R.string.msg_record_saved), Snackbar.LENGTH_SHORT).show();
+                }
+                isRecording = false;
+                if (btnCapture != null) btnCapture.setImageResource(R.drawable.ic_camera);
             }
         });
+    }
+
+    private void stopRecording() {
+        if (currentRecording != null) {
+            try { currentRecording.stop(); } catch (Exception e) { Log.w(TAG, "stopRecording error", e); }
+        }
+    }
+
+    private void updateTorch() {
+        try {
+            if (currentCamera != null) {
+                // Evitar activar torch si la cámara es frontal
+                if (cameraSelector == CameraSelector.DEFAULT_FRONT_CAMERA) {
+                    flashEnabled = false;
+                }
+                currentCamera.getCameraControl().enableTorch(flashEnabled);
+                if (btnFlash != null) {
+                    btnFlash.setImageResource(flashEnabled ? R.drawable.ic_flash_on : R.drawable.ic_flash_off);
+                    // ocultar si frontal
+                    btnFlash.setVisibility(cameraSelector == CameraSelector.DEFAULT_FRONT_CAMERA ? View.GONE : View.VISIBLE);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "updateTorch error", e);
+        }
     }
 
     /**
@@ -420,30 +550,17 @@ public class CameraActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         // remover listener para evitar fugas
-        try {
-            if (previewView != null && previewView.getViewTreeObserver() != null && layoutListener != null) {
-                previewView.getViewTreeObserver().removeOnGlobalLayoutListener(layoutListener);
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "onDestroy: error removiendo layoutListener", e);
-        }
-
+        try { if (previewView != null && previewView.getViewTreeObserver() != null && layoutListener != null) previewView.getViewTreeObserver().removeOnGlobalLayoutListener(layoutListener); } catch (Exception e) { Log.w(TAG, "onDestroy: layoutListener", e); }
         // Asegurar detener preview filtrado
         stopFilterPreview();
         // Limpiar executor
-        try {
-            cameraExecutor.shutdown();
-        } catch (Exception e) {
-            Log.w(TAG, "onDestroy: error cerrando cameraExecutor", e);
-        }
+        try { cameraExecutor.shutdown(); } catch (Exception e) { Log.w(TAG, "onDestroy: executor", e); }
         // Cerrar SmartAnalyzer si está activo
-        if (smartAnalyzer != null) {
-            try {
-                smartAnalyzer.close();
-            } catch (Exception e) {
-                Log.w(TAG, "onDestroy: error cerrando SmartAnalyzer", e);
-            }
-        }
+        if (smartAnalyzer != null) { try { smartAnalyzer.close(); } catch (Exception e) { Log.w(TAG, "onDestroy: analyzer", e); } }
+        // detener recording si aún está grabando
+        try { if (isRecording) stopRecording(); } catch (Exception e) { Log.w(TAG, "onDestroy: recording", e); }
+        // limpiar callbacks del pressHandler
+        try { pressHandler.removeCallbacks(startRecordingRunnable); } catch (Exception ignored) {}
     }
 
     /**
@@ -458,53 +575,28 @@ public class CameraActivity extends AppCompatActivity {
     private void adjustOverlayPositions() {
         try {
             int maxBottom = 0;
-            if (fabSwitch != null && fabSwitch.getVisibility() == View.VISIBLE) {
-                maxBottom = Math.max(maxBottom, fabSwitch.getBottom());
-            }
-            if (fabFilter != null && fabFilter.getVisibility() == View.VISIBLE) {
-                maxBottom = Math.max(maxBottom, fabFilter.getBottom());
-            }
-            if (fabSmart != null && fabSmart.getVisibility() == View.VISIBLE) {
-                maxBottom = Math.max(maxBottom, fabSmart.getBottom());
-            }
-
-            // Añadir margen en dp
+            if (fabSwitch != null && fabSwitch.getVisibility() == View.VISIBLE) maxBottom = Math.max(maxBottom, fabSwitch.getBottom());
+            if (fabFilter != null && fabFilter.getVisibility() == View.VISIBLE) maxBottom = Math.max(maxBottom, fabFilter.getBottom());
+            if (fabSmart != null && fabSmart.getVisibility() == View.VISIBLE) maxBottom = Math.max(maxBottom, fabSmart.getBottom());
             int margin = dpToPx(8);
-            float translation = (float) (maxBottom + margin);
-
-            if (tvResult != null) {
-                // Aplicamos translationY solo si es mayor que la posición actual para evitar movimientos hacia arriba extraños
-                tvResult.setTranslationY(translation);
-            }
-            if (tvFilter != null) {
-                tvFilter.setTranslationY(translation);
-            }
-            // También ajustar overlay del filtro para que no se mueva
-            if (ivFilterOverlay != null) {
-                ivFilterOverlay.setTranslationY(translation);
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "adjustOverlayPositions: fallo al ajustar overlays", e);
-        }
+            float translation = maxBottom + margin;
+            if (tvResult != null) tvResult.setTranslationY(translation);
+            if (tvFilter != null) tvFilter.setTranslationY(translation);
+            if (ivFilterOverlay != null) ivFilterOverlay.setTranslationY(translation);
+        } catch (Exception e) { Log.w(TAG, "adjustOverlayPositions", e); }
     }
 
     /**
      * Convierte dp a píxeles.
      */
-    private int dpToPx(int dp) {
-        float density = getResources().getDisplayMetrics().density;
-        return Math.round(dp * density);
-    }
+    private int dpToPx(int dp) { return Math.round(dp * getResources().getDisplayMetrics().density); }
 
     private void stopFilterPreview() {
         filterRunning = false;
         try {
             mainHandler.removeCallbacks(filterLoopRunnable);
-            if (ivFilterOverlay != null) ivFilterOverlay.setImageBitmap(null);
-            if (ivFilterOverlay != null) ivFilterOverlay.setVisibility(View.GONE);
-        } catch (Exception e) {
-            Log.w(TAG, "stopFilterPreview error", e);
-        }
+            if (ivFilterOverlay != null) { ivFilterOverlay.setImageBitmap(null); ivFilterOverlay.setVisibility(View.GONE); }
+        } catch (Exception e) { Log.w(TAG, "stopFilterPreview", e); }
     }
 
     private void startFilterPreview() {

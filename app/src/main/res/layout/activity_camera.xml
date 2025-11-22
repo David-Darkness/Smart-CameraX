@@ -10,7 +10,20 @@
         android:layout_height="match_parent"
         android:layout_gravity="center" />
 
-    <!-- Botón de volver a la pantalla principal (ahora en la parte inferior izquierda) -->
+    <!-- Botón único: pulsación corta foto / larga grabación -->
+    <ImageButton
+        android:id="@+id/btn_capture"
+        android:layout_width="84dp"
+        android:layout_height="84dp"
+        android:background="@drawable/capture_button_bg"
+        android:contentDescription="@string/desc_take_photo"
+        android:padding="16dp"
+        android:src="@drawable/ic_camera"
+        app:layout_anchor="@id/preview_view"
+        app:layout_anchorGravity="bottom|center"
+        android:layout_marginBottom="32dp" />
+
+    <!-- Botón volver -->
     <ImageButton
         android:id="@+id/btn_back_camera"
         android:layout_width="40dp"
@@ -23,7 +36,6 @@
         android:layout_marginStart="16dp"
         android:layout_marginBottom="32dp" />
 
-    <!-- Resultado del modo inteligente (texto detectado / QR) -->
     <TextView
         android:id="@+id/tv_result"
         android:layout_width="match_parent"
@@ -41,7 +53,6 @@
         android:layout_marginEnd="16dp"
         android:gravity="center" />
 
-    <!-- Indicador del filtro actual -->
     <TextView
         android:id="@+id/tv_filter"
         android:layout_width="wrap_content"
@@ -93,16 +104,15 @@
         android:contentDescription="@string/desc_smart_mode" />
 
     <ImageButton
-        android:id="@+id/btn_capture"
-        android:layout_width="84dp"
-        android:layout_height="84dp"
-        android:layout_gravity="bottom|center"
+        android:id="@+id/btn_flash"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:layout_marginBottom="32dp"
-        android:background="@drawable/capture_button_bg"
-        android:src="@drawable/ic_camera"
-        android:contentDescription="@string/desc_take_photo"
-        android:padding="16dp"
+        android:layout_marginEnd="16dp"
+        android:background="@android:color/transparent"
+        android:src="@drawable/ic_flash_off"
+        android:contentDescription="@string/desc_toggle_flash"
         app:layout_anchor="@id/preview_view"
-        app:layout_anchorGravity="bottom|center" />
+        app:layout_anchorGravity="bottom|end" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

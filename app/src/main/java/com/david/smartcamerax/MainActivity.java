@@ -30,5 +30,13 @@ public class MainActivity extends AppCompatActivity {
         //botón para abrir la galería de imágenes guardadas por la app
         MaterialButton btnGallery = findViewById(R.id.btn_open_gallery);
         btnGallery.setOnClickListener(v -> startActivity(new Intent(this, GalleryActivity.class)));
+
+        // botón para salir de la aplicación
+        MaterialButton btnExit = findViewById(R.id.btn_exit);
+        btnExit.setOnClickListener(v -> {
+            finishAffinity();
+            // Opcional: asegurar que el proceso termina en caso extremo
+            System.exit(0);
+        });
     }
 }

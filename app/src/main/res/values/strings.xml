@@ -13,6 +13,8 @@
     <string name="desc_smart_mode">Modo inteligente</string>
     <string name="desc_take_photo">Tomar foto</string>
     <string name="desc_back">Volver</string>
+    <string name="desc_record_video">Grabar video</string>
+    <string name="desc_toggle_flash">Activar/Desactivar flash</string>
 
     <!-- Mensajes usados por CameraActivity -->
     <string name="msg_filter">Filtro: %1$s</string>
@@ -21,6 +23,10 @@
     <string name="msg_photo_saved">Foto guardada</string>
     <string name="msg_photo_error">Error al guardar foto</string>
     <string name="msg_permission_denied">Permiso de cámara denegado</string>
+    <string name="msg_recording_start">Grabando...</string>
+    <string name="msg_record_saved">Video guardado</string>
+    <string name="msg_record_error">Error al guardar video</string>
+    <string name="msg_record_not_supported">Grabación no soportada</string>
 
     <!-- Nombres de filtros -->
     <string name="filter_normal">Normal</string>
